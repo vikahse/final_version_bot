@@ -1,6 +1,6 @@
 import asyncio
 from constants import *
-
+from datetime import datetime
 
 class Player:
     def __init__(self, user, chat_id):
@@ -15,7 +15,6 @@ class Player:
         self._num_of_wins = 0
         self._view_cards = False
         self._finding_game = False
-
 
     @property
     def id(self):
@@ -153,7 +152,7 @@ class Game:
         self.previous_cards = set()
         self.cards_in_game = []
         self.current_card_value = ""
-        self.time_to_wait = 180
+        self.time_to_wait = 10
         self.is_add_previous_player = False  # хранит положил человек карты или положил ЕЩЕ
         self.used_cards = []
         self.available = ['a_s', '2_s', '3_s', '4_s', '5_s', '6_s', '7_s', '8_s', '9_s', '10_s', 'j_s', 'q_s', 'k_s',
@@ -168,6 +167,7 @@ class Game:
         self.is_game_open = True
         self.message_check = True
         self.message_sent = None
+        self.game_time = datetime.now()
 
     async def check(self):
         # print(1)
