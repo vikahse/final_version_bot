@@ -1,8 +1,11 @@
 import random
 from modules import *
 from service import *
-from main import bot, manager
+from main import bot, manager, session
 from take_photo import *
+from sqlalchemy.exc import PendingRollbackError, IntegrityError
+from models import *
+from datetime import datetime
 
 
 @bot.message_handler(commands=['start'])
@@ -14,6 +17,7 @@ async def hello_message(message):
                                             f'Если перед игрой ты хочешь почитать правила игры,'
                                             f'то напиши /rules 🃏')
 
+
 @bot.message_handler(commands=['end_game'])
 async def end_game(message: [types.Message]):
     user_id = message.from_user.id
@@ -23,21 +27,23 @@ async def end_game(message: [types.Message]):
         markup_reply = types.ReplyKeyboardRemove()
         player = None
         for pl in game.players_in_game:
-            pl.num_of_games += 1
             if pl.id == message.from_user.id:
                 player = pl
+        clear_data(game, None)
         for pl in game.players_in_game:
             if pl.id == message.from_user.id:
                 pl.finding_game = False
-                const = await bot.send_message(user_id, 'Вы вышли из игры! Игра закончилась!', reply_markup=markup_reply)
+                const = await bot.send_message(user_id, 'Вы вышли из игры! Игра закончилась!',
+                                               reply_markup=markup_reply)
 
                 if game.message_sent.message_id is not None and game.message_sent.chat.id == const.chat.id:
                     await bot.delete_message(const.chat.id, game.message_sent.message_id)
 
             else:
                 pl.finding_game = False
-                const2 = await bot.send_message(pl.id, f'Игра закончилась, так как игрок №{player.number} вышел из нее!',
-                                       reply_markup=markup_reply)
+                const2 = await bot.send_message(pl.id,
+                                                f'Игра закончилась, так как игрок №{player.number} вышел из нее!',
+                                                reply_markup=markup_reply)
 
                 if game.message_sent.message_id is not None and game.message_sent.chat.id == const2.chat.id:
                     await bot.delete_message(const2.chat.id, game.message_sent.message_id)
@@ -102,6 +108,7 @@ async def join_game(message: [types.Message]):
     player.finding_game = True
     game = await manager.find_players(player)
     if game is not None:
+        game.game_time = datetime.now()
         game.is_game_open = True
         game.cur_player = 1
         await bot.send_message(message.from_user.id, 'приятной игры!')
@@ -113,7 +120,7 @@ async def join_game(message: [types.Message]):
             markup.add(make_choice_btn)
 
             const = await bot.send_message(message.from_user.id, text=f'Игрок {game.cur_player} сделай ход',
-                                   reply_markup=markup)
+                                           reply_markup=markup)
             game.message_sent = const
             await game.check()
 
@@ -247,14 +254,14 @@ async def not_believe(call):
                         if game.message_sent.message_id is not None and game.message_sent.chat.id == conts.chat.id:
                             await bot.delete_message(call.message.chat.id, game.message_sent.message_id)
 
-                    else:
-                        pl.num_of_wins += 1
+                    # else:
+                    #     pl.num_of_wins += 1
                 const = await bot.send_message(winner.id, text=f'Поздравляем! Вы победили! Игра окончена')
 
                 if game.message_sent.message_id is not None and game.message_sent.chat.id == const.chat.id:
                     await bot.delete_message(call.message.chat.id, game.message_sent.message_id)
 
-                clear_data(game)
+                clear_data(game, winner)
 
             else:
                 markup = types.InlineKeyboardMarkup(row_width=1)
@@ -271,7 +278,6 @@ async def not_believe(call):
                         await bot.send_message(game.players_in_game[game.prev_player - 1].chat_id,
                                                text=f'Вы взяли 🃏x{refactor(len(game.cards_in_game), "карта")}')
 
-
                 for card in game.cards_in_game:
                     game.players_in_game[game.prev_player - 1].cards.append(card)
                 number_of_cards = len(game.cards_in_game)
@@ -282,9 +288,11 @@ async def not_believe(call):
 
                 await bot.delete_message(call.message.chat.id, game.message_sent.message_id)
 
-                await bot.send_message(call.message.chat.id,
+                const = await bot.send_message(call.message.chat.id,
                                        f'Игрок {game.cur_player}, сделай ставку:',
                                        reply_markup=markup)
+
+                game.message_sent = const
         else:  # не поверил и не прав
             for other_pl in game.players_in_game:
                 await take_photo_of_the_field(game, other_pl, game.cur_player, game.prev_player, False, False)
@@ -303,6 +311,7 @@ async def not_believe(call):
             game.previous_cards.clear()
             await update_current_player(game)
             await new_step(game)
+
 
 @bot.callback_query_handler(func=lambda call: call.data == "believe")
 async def believe(call):
@@ -333,21 +342,18 @@ async def believe(call):
                 game.is_game_open = False
                 for pl in game.players_in_game:
                     await take_photo_of_the_field(game, pl, game.cur_player, game.prev_player, False, True)
-                    # pl.num_of_games += 1
                     if pl.id != winner.id:
                         conts = await bot.send_message(pl.id, text=f'Игрок {winner.number} победил! Игра окончена')
 
                         if game.message_sent.message_id is not None and game.message_sent.chat.id == conts.chat.id:
                             await bot.delete_message(call.message.chat.id, game.message_sent.message_id)
-                    else:
-                        pl.num_of_wins += 1
 
                 const = await bot.send_message(winner.id, text=f'Поздравляем! Вы победили! Игра окончена')
 
                 if game.message_sent.message_id is not None and game.message_sent.chat.id == const.chat.id:
                     await bot.delete_message(call.message.chat.id, game.message_sent.message_id)
 
-                clear_data(game)
+                clear_data(game, winner)
             else:
                 markup = types.InlineKeyboardMarkup(row_width=1)
                 make_choice_btn = types.InlineKeyboardButton(text='⬇️ Выбрать карты ⬇️', callback_data="cards")
@@ -367,8 +373,9 @@ async def believe(call):
                 game.previous_cards.clear()
                 for pl in game.players_in_game:
                     await take_photo_of_the_field(game, pl, game.cur_player, game.prev_player, False, True)
-                await bot.send_message(call.message.chat.id, f'Игрок {game.cur_player}, сделай ставку:',
+                const = await bot.send_message(call.message.chat.id, f'Игрок {game.cur_player}, сделай ставку:',
                                        reply_markup=markup)
+                game.message_sent = const
         else:  # поверил и не прав
             for other_pl in game.players_in_game:
                 await take_photo_of_the_field(game, other_pl, game.cur_player, game.prev_player, True, False)
@@ -570,26 +577,21 @@ async def new_step(game):
         await take_photo_of_the_field(game, other_pl, game.cur_player, game.prev_player, False, True)
     if len(cur.cards) == 0 and len(game.cards_in_game) == 0:
         for pl in game.players_in_game:
-            # pl.num_of_games += 1
             if pl.id != cur.id:
                 await bot.send_message(pl.id, text=f'Игрок {cur.number} победил! Игра окончена')
-            else:
-                pl.num_of_wins += 1
         await bot.send_message(cur.id, text=f'Поздравляем! Вы победили! Игра окончена')
-        clear_data(game)
+        clear_data(game, cur)
     elif len(cur.cards) == 0 and len(game.cards_in_game) != 0:
         await options_if_end(game, cur.id)
     elif len(cur.cards) != 0 and len(game.cards_in_game) == 0:
         markup = types.InlineKeyboardMarkup(row_width=1)
         make_choice_btn = types.InlineKeyboardButton(text='⬇️ Выбрать карты ⬇️', callback_data="cards")
         markup.add(make_choice_btn)
-        await bot.send_message(cur.id, f'Игрок {cur.number}, сделай ставку:',
+        const = await bot.send_message(cur.id, f'Игрок {cur.number}, сделай ставку:',
                                reply_markup=markup)
+        game.message_sent = const
     else:
         await options(game, cur.id)
-
-
-
 
 
 async def options(game, player_id):
@@ -606,6 +608,7 @@ async def options(game, player_id):
 
     game.message_sent = const
 
+
 async def options_if_end(game, player_id):
     markup = types.InlineKeyboardMarkup(row_width=1)
     btn_believe = types.InlineKeyboardButton(text="Верю", callback_data="believe")
@@ -614,6 +617,7 @@ async def options_if_end(game, player_id):
     const = await bot.send_message(player_id, f"Игрок {game.cur_player} сделай ход:", reply_markup=markup)
 
     game.message_sent = const
+
 
 async def hand_out_cards(game, player):
     if game.number_of_card_for_each < game.not_used < game.number_of_card_for_each * 2:
@@ -639,8 +643,44 @@ async def update_current_player(game):
         game.cur_player += 1
 
 
-def clear_data(game):
+def clear_data(game, player):
+    now = datetime.now()
+    game.game_time = now - game.game_time
+
+    time = game.game_time.seconds
+
     for pl in game.players_in_game:
         pl.cards.clear()
         pl.num_of_games += 1
         pl.finding_game = False
+
+        user = User.query.filter_by(id=pl.id).first()
+        if not user:
+            user = User(id=int(pl.id), num_of_games=pl.num_of_games, num_of_wins=pl.num_of_wins)
+
+            session.add(user)
+        else:
+            user.num_of_wins = pl.num_of_wins
+            user.num_of_games = pl.num_of_games
+
+    if player is not None:
+        player.num_of_wins += 1
+
+        game = Game(num_of_players=int(game.players_cnt - 1), winner_id=int(player.id), duration_of_game =int(time))
+
+        session.add(game)
+
+        user = User.query.filter_by(id=player.id).first()
+        user.num_of_wins = player.num_of_wins
+        user.num_of_games = player.num_of_games
+    else:
+        game = Game(num_of_players=int(game.players_cnt - 1), winner_id=int(0), duration_of_game=int(time))
+
+        session.add(game)
+
+    try:
+        session.commit()
+        return True
+    except IntegrityError:
+        session.rollback()  # откатываем session.add(user)
+        return False
